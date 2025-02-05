@@ -12,6 +12,7 @@ public:
     PluginProcessor();
     ~PluginProcessor() override;
 
+    // Necessary overrides
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
 
@@ -38,6 +39,15 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    // Main parameter manager
+    juce::AudioProcessorValueTreeState parameters;
+
 private:
+    // Member variables
+    //float gain = 1.5f;
+
+    // A helper function to define the layout of our parameters
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

@@ -1,6 +1,9 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+// Construction and Deconstruction
+// adds inputs/outputs depending on if the plugin is synth, midi, or neither
+// Constructor runs when plugin opens, Deconstructor runs with it closes
 //==============================================================================
 PluginProcessor::PluginProcessor()
      : AudioProcessor (BusesProperties()
@@ -11,6 +14,8 @@ PluginProcessor::PluginProcessor()
                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                      #endif
                        )
+    // Initialize our 'parameters' member using the parameter layout
+     , parameters (*this, nullptr, "PARAMETER_STATE", createParameterLayout())
 {
 }
 
@@ -19,11 +24,34 @@ PluginProcessor::~PluginProcessor()
 }
 
 //==============================================================================
+
+// This function creates our parameter(s). We create a "gain" float parameter here.
+juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParameterLayout()
+{
+    // We'll store parameters in a vector, then return it
+    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+
+    // Create a float parameter, with an ID, name, range, default value, etc.
+    // ID must match what you'll use in the editor's attachment
+    auto gainParam = std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID {"gain", 1},  // Parameter ID + version
+        "Gain",                         // Parameter name (shown in DAW)
+        juce::NormalisableRange<float>(0.0f, 2.0f, 0.01f, 1.0f),  // range: 0.0 to 2.0
+        1.0f                            // default value
+    );
+    params.push_back(std::move(gainParam));
+
+    return { params.begin(), params.end() };
+}
+
+// Name
 const juce::String PluginProcessor::getName() const
 {
     return JucePlugin_Name;
 }
 
+// Midi
+//------------------------------------------
 bool PluginProcessor::acceptsMidi() const
 {
    #if JucePlugin_WantsMidiInput
@@ -50,12 +78,16 @@ bool PluginProcessor::isMidiEffect() const
     return false;
    #endif
 }
+//------------------------------------------
 
+// Defines audio tail (reverb, delay, etc.) after audio stops
 double PluginProcessor::getTailLengthSeconds() const
 {
     return 0.0;
 }
 
+// Mostly placeholders for presets/programs
+//------------------------------------------------------------
 int PluginProcessor::getNumPrograms()
 {
     return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
@@ -82,6 +114,7 @@ void PluginProcessor::changeProgramName (int index, const juce::String& newName)
 {
     juce::ignoreUnused (index, newName);
 }
+//------------------------------------------------------------
 
 //==============================================================================
 void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -122,32 +155,40 @@ bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                               juce::MidiBuffer& midiMessages)
 {
-    juce::ignoreUnused (midiMessages);
-
+    // Prepare for floating-point arithmetic
     juce::ScopedNoDenormals noDenormals;
+    juce::ignoreUnused (midiMessages);
+    
+    // Get the number of channels and samples
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
+    auto numSamples = buffer.getNumSamples();
 
-    // In case we have more outputs than inputs, this code clears any output
-    // channels that didn't contain input data, (because these aren't
+    // This code clears any output channels that didn't contain
+    // input data to avoid feedback, (because these aren't
     // guaranteed to be empty - they may contain garbage).
-    // This is here to avoid people getting screaming feedback
-    // when they first compile a plugin, but obviously you don't need to keep
-    // this code if your algorithm always overwrites all the output channels.
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear (i, 0, buffer.getNumSamples());
+        buffer.clear (i, 0, numSamples);
 
-    // This is the place where you'd normally do the guts of your plugin's
-    // audio processing...
+    // Get the current value of the gain parameter in real time
+    float currentGain = *parameters.getRawParameterValue("gain");
+
     // Make sure to reset the state if your inner loop is processing
     // the samples and the outer loop is handling the channels.
     // Alternatively, you can process the samples with the channels
     // interleaved by keeping the same state.
+    // Channel Loop
     for (int channel = 0; channel < totalNumInputChannels; ++channel)
     {
-        auto* channelData = buffer.getWritePointer (channel);
-        juce::ignoreUnused (channelData);
-        // ..do something to the data...
+        // Pointer to this channel's sample data
+        auto* channelData = buffer.getWritePointer(channel);
+        
+        // Sample Loop
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            // Sample application
+            channelData[sample] *= currentGain;
+        }
     }
 }
 
@@ -168,14 +209,27 @@ void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
     // You should use this method to store your parameters in the memory block.
     // You could do that either as raw data, or use the XML or ValueTree classes
     // as intermediaries to make it easy to save and load complex data.
-    juce::ignoreUnused (destData);
+
+    // Let the AudioProcessorValueTreeState handle serialization
+    // WTF does this do exactly??
+    auto state = parameters.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
 }
 
 void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     // You should use this method to restore your parameters from this memory block,
     // whose contents will have been created by the getStateInformation() call.
-    juce::ignoreUnused (data, sizeInBytes);
+
+    // Let the AudioProcessorValueTreeState handle deserialization
+    // ??????
+    std::unique_ptr<juce::XmlElement> xml (getXmlFromBinary (data, sizeInBytes));
+    if (xml.get() != nullptr)
+    {
+        if (xml->hasTagName (parameters.state.getType()))
+            parameters.replaceState (juce::ValueTree::fromXml (*xml));
+    }
 }
 
 //==============================================================================
